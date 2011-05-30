@@ -1,5 +1,7 @@
 from django.db.backends import BaseDatabaseIntrospection
-from MonetSQLdb import ProgrammingError, OperationalError
+import monetdb, monetdb.sql
+ProgrammingError = monetdb.monetdb_exceptions.ProgrammingError
+OperationalError = monetdb.monetdb_exceptions.OperationalError
 import re
 
 foreign_key_re = re.compile(r"\sCONSTRAINT `[^`]*` FOREIGN KEY \(`([^`]*)`\) REFERENCES `([^`]*)` \(`([^`]*)`\)")

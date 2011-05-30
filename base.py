@@ -7,12 +7,18 @@ Requires Monetdb: and requires the MonetSQLdb package which comes with it.
 import re
 
 try:
-    import MonetSQLdb as Database
+    import monetdb
+    import monetdb.sql as Database
+    DatabaseError = monetdb.monetdb_exceptions.DatabaseError
+    IntegrityError = monetdb.monetdb_exceptions.IntegrityError
+    NotSupportedError = monetdb.monetdb_exceptions.NotSupportedError
 except ImportError, e:
     from django.core.exceptions import ImproperlyConfigured
     raise ImproperlyConfigured("Error loading MonetSQLdb module: %s" % e)
 
-from MonetSQLdb.converters import conversions
+import monetdb
+import monetdb.sql
+import monetdb.sql.converters as django_conversions
 #from MonetSQLdb.constants import FIELD_TYPE, FLAG
 
 from django.db.backends import *
@@ -23,8 +29,6 @@ from django.db.backends.monetdb.introspection import DatabaseIntrospection
 
 # Raise exceptions for database warnings if DEBUG is on
 from django.conf import settings
-DatabaseError = Database.DatabaseError
-IntegrityError = Database.IntegrityError
 
 # MySQLdb-1.2.1 supports the Python boolean type, and only uses datetime
 # module for time-related columns; older versions could have used mx.DateTime
@@ -32,7 +36,7 @@ IntegrityError = Database.IntegrityError
 # TIME columns as timedelta -- they are more like timedelta in terms of actual
 # behavior as they are signed and include days -- and Django expects time, so
 # we still need to override that.
-django_conversions = conversions.copy()
+#django_conversions = conversions.copy()
 
 # This should match the numerical portion of the version numbers (we can treat
 # versions like 5.0.24 and 5.0.24a as the same). Based on the list of version
@@ -183,16 +187,20 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         'iendswith': 'LIKE %s',
     }
 
-    def __init__(self, **kwargs):
-        super(DatabaseWrapper, self).__init__(**kwargs)
+    def __init__(self, *args, **kwargs):
+        super(DatabaseWrapper, self).__init__(*args, **kwargs)
+
         self.server_version = None
 
         self.features = DatabaseFeatures()
         self.ops = DatabaseOperations()
-        self.client = DatabaseClient()
+        self.client = DatabaseClient(self)
         self.creation = DatabaseCreation(self)
         self.introspection = DatabaseIntrospection(self)
-        self.validation = BaseDatabaseValidation()
+        try:
+            self.validation = BaseDatabaseValidation()
+        except TypeError:
+            self.validation = BaseDatabaseValidation(self)
 
     def _valid_connection(self):
         if self.connection is not None:
@@ -205,7 +213,29 @@ class DatabaseWrapper(BaseDatabaseWrapper):
                 self.connection = None
         return False
 
-    def _cursor(self, settings):
+    def _cursor(self):
+        if self.connection is None:
+            settings_dict = self.settings_dict
+            if 'NAME' in settings_dict.keys() \
+               and 'DATABASE_NAME' not in settings_dict.keys():
+                settings_dict['DATABASE_NAME'] = settings_dict['NAME']
+            if 'OPTIONS' in settings_dict.keys() \
+               and 'DATABASE_OPTIONS' not in settings_dict.keys():
+                settings_dict['DATABASE_OPTIONS'] = settings_dict['OPTIONS']
+
+            if not settings_dict['DATABASE_NAME']:
+                from django.core.exceptions import ImproperlyConfigured
+                raise ImproperlyConfigured, "Please fill out DATABASE_NAME in the settings module before using the database."
+            kwargs = {
+                'database': settings_dict['DATABASE_NAME'],
+                #'detect_types': Database.PARSE_DECLTYPES | Database.PARSE_COLNAMES,
+            }
+            kwargs.update(settings_dict['DATABASE_OPTIONS'])
+            self.connection = Database.connect(**kwargs)
+            # Register extract, date_trunc, and regexp functions.
+        return self.connection.cursor() #factory=MonetdbCursorWrapper)
+
+    def _DEPRECATED_cursor(self, settings):
         if not self._valid_connection():
             kwargs = {
                 'conv': django_conversions,
@@ -236,7 +266,7 @@ class DatabaseWrapper(BaseDatabaseWrapper):
         return
         try:
             BaseDatabaseWrapper._rollback(self)
-        except Database.NotSupportedError:
+        except NotSupportedError:
             pass
 
     def get_server_version(self):
